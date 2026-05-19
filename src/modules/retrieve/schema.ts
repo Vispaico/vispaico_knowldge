@@ -22,3 +22,8 @@ export interface RetrieveResponse {
   query: string;
   contexts: RetrievedContext[];
 }
+
+/** Optional parameters for internal usage (not exposed on the public endpoint). */
+export interface RetrieveOptions {
+  boost_urls?: string[];
+}

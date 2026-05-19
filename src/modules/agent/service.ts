@@ -2,69 +2,9 @@ import { NotFoundError } from "../../lib/errors.js";
 import { logger } from "../../lib/logger.js";
 import * as retrieveService from "../retrieve/service.js";
 import * as wsRepo from "../workspaces/repository.js";
-import type { AgentChatInput, AgentChatResponse, Citation, Action } from "./schema.js";
-
-// Map of topic keywords to suggested actions
-const TOPIC_ACTIONS: Array<{ keywords: string[]; label: string; url: string }> = [
-  { keywords: ["pricing", "price", "cost", "plan", "subscription", "pay", "payment", "24,800", "24800"], label: "See Launch Program", url: "https://vispaico.com/en/launch" },
-  { keywords: ["launch", "program"], label: "See Launch Program", url: "https://vispaico.com/en/launch" },
-  { keywords: ["service", "offer", "solution", "consulting", "studio"], label: "See Services", url: "https://vispaico.com/en/services" },
-  { keywords: ["owner", "ownership", "own", "ip", "intellectual property", "codebase", "source code"], label: "Ownership FAQ", url: "https://vispaico.com/en/faq" },
-  { keywords: ["process", "timeline", "timelines", "duration", "how long", "roadmap", "milestone"], label: "Process FAQ", url: "https://vispaico.com/en/faq" },
-  { keywords: ["faq", "question", "support", "help"], label: "FAQ Page", url: "https://vispaico.com/en/faq" },
-  { keywords: ["about", "company", "founder", "team", "vision", "mission"], label: "About Us", url: "https://vispaico.com/en/about" },
-  { keywords: ["contact", "call", "quote", "consultation", "reach", "email", "phone", "meet"], label: "Contact Us", url: "https://vispaico.com/en/contact" },
-];
-
-function findActions(message: string, contexts: { document_url?: string | null }[]): Action[] {
-  const lower = message.toLowerCase();
-  const suggested: Action[] = [];
-
-  for (const topic of TOPIC_ACTIONS) {
-    if (topic.keywords.some((kw) => lower.includes(kw))) {
-      // Deduplicate by url
-      if (!suggested.some((a) => a.url === topic.url)) {
-        suggested.push({ type: "open_page", label: topic.label, url: topic.url });
-      }
-    }
-  }
-
-  // If no topic match, derive from the top retrieved context's URL
-  if (suggested.length === 0 && contexts.length > 0) {
-    const topUrl = contexts[0].document_url;
-    if (topUrl) {
-      suggested.push({ type: "open_page", label: "View Page", url: topUrl });
-    }
-  }
-
-  return suggested;
-}
-
-function buildAnswer(
-  contexts: { document_title: string; content_snippet: string }[],
-): string {
-  if (contexts.length === 0) {
-    return "I could not find relevant information to answer your question. Please try rephrasing or visit the FAQ page for more details.";
-  }
-
-  // Build a summary answer from the top context snippets
-  const parts: string[] = [];
-
-  for (let i = 0; i < Math.min(contexts.length, 3); i++) {
-    const ctx = contexts[i];
-    // Strip <mark> tags for cleaner answer text
-    const clean = ctx.content_snippet.replace(/<\/?mark>/g, "");
-    if (clean.trim()) {
-      parts.push(clean);
-    }
-  }
-
-  if (parts.length === 0) {
-    return `Based on the retrieved information from "${contexts[0].document_title}", I found relevant results but could not extract a clean snippet. Please visit the page directly.`;
-  }
-
-  return parts.join("\n\n");
-}
+import { detectIntent, buildActions } from "./intent.js";
+import { cleanSnippet, isLowSignalSnippet } from "./cleanup.js";
+import type { AgentChatInput, AgentChatResponse, Citation } from "./schema.js";
 
 export async function agentChat(
   workspace_id: string,
@@ -77,29 +17,43 @@ export async function agentChat(
 
   logger.info({ workspace_id, message: input.message }, "Agent chat");
 
-  // Step 1: Retrieve relevant context
-  const retrieveResult = await retrieveService.retrieveWorkspace(workspace_id, {
-    query: input.message,
-    limit: 8,
-  });
+  // Step 1: Detect intent and get URL boost list
+  const intent = detectIntent(input.message);
+  const boostUrls = intent.boost_urls;
 
-  const contexts = retrieveResult.contexts;
+  // Step 2: Retrieve with intent-aware boosting
+  const retrieveResult = await retrieveService.retrieveWorkspace(
+    workspace_id,
+    { query: input.message, limit: 8 },
+    { boost_urls: boostUrls.length > 0 ? boostUrls : undefined },
+  );
 
-  // Step 2: Build answer from context
-  const answer = buildAnswer(contexts);
+  // Step 3: Clean and filter contexts
+  const cleanedContexts = retrieveResult.contexts
+    .map((ctx) => ({
+      ...ctx,
+      content_snippet: cleanSnippet(ctx.content_snippet),
+    }))
+    .filter((ctx) => !isLowSignalSnippet(ctx.content_snippet) && ctx.content_snippet.length >= 20);
 
-  // Step 3: Build citations
-  const citations: Citation[] = contexts.map((ctx) => ({
+  // Step 4: Build synthesized answer
+  const answer = synthesizeAnswer(intent.primary, cleanedContexts);
+
+  // Step 5: Build citations (max 3, most relevant only)
+  const citations: Citation[] = cleanedContexts.slice(0, 3).map((ctx) => ({
     document_title: ctx.document_title,
     document_url: ctx.document_url,
     section_title: ctx.section_title,
   }));
 
-  // Step 4: Build smart action suggestions
-  const actions = findActions(input.message, contexts);
+  // Step 6: Build actions from intent detection
+  const actions = buildActions(intent.all_intents);
+
+  // Step 7: Limit contexts_used to 2-4
+  const contextsUsed = Math.min(Math.max(cleanedContexts.length, 2), 4);
 
   logger.info(
-    { workspace_id, contexts_used: contexts.length, actions: actions.length },
+    { workspace_id, contexts_raw: retrieveResult.contexts.length, contexts_clean: cleanedContexts.length, intent: intent.primary, actions: actions.length },
     "Agent chat response",
   );
 
@@ -107,6 +61,92 @@ export async function agentChat(
     answer,
     citations,
     actions,
-    contexts_used: contexts.length,
+    contexts_used: contextsUsed,
   };
+}
+
+function synthesizeAnswer(
+  intent: string,
+  contexts: Array<{ document_title: string; document_url?: string | null; content_snippet: string }>,
+): string {
+  if (contexts.length === 0) {
+    return "I could not find relevant information to answer your question. Please try rephrasing or visit one of the pages linked below for more details.";
+  }
+
+  // Extract the most relevant content fragments
+  const relevantFacts: string[] = [];
+  const seenTitles = new Set<string>();
+
+  for (const ctx of contexts) {
+    if (seenTitles.size >= 3 && relevantFacts.length >= 3) break;
+    seenTitles.add(ctx.document_title);
+
+    const clean = ctx.content_snippet;
+    if (clean.length < 30) continue;
+
+    relevantFacts.push(clean);
+  }
+
+  // If we have no usable content after cleaning
+  if (relevantFacts.length === 0) {
+    return `Based on "${contexts[0].document_title}": I found relevant information but could not extract clear text. Please visit the page directly.`;
+  }
+
+  // Build a concise 2-5 sentence answer based on intent + facts
+  return buildGroundedAnswer(intent, contexts, relevantFacts);
+}
+
+function buildGroundedAnswer(
+  intent: string,
+  contexts: Array<{ document_title: string; document_url?: string | null }>,
+  facts: string[],
+): string {
+  const bestTitle = contexts[0]?.document_title ?? "the page";
+  const bestFacts = facts.slice(0, 3);
+
+  // Intent-specific answer formats
+  switch (intent) {
+    case "contact": {
+      return `The best next step is to contact Vispaico directly or book a call through the contact page. ${bestFacts[0] ?? ""}`;
+    }
+    case "pricing": {
+      // If we have a concrete pricing snippet, lead with it
+      const pricingFact = bestFacts[0] ?? "";
+      if (pricingFact) {
+        return `${pricingFact}`;
+      }
+      return `The best page to read is the Launch Program page. It explains the offer and breaks down what is included.`;
+    }
+    case "ownership": {
+      const ownershipFact = bestFacts[0] ?? "";
+      if (ownershipFact) {
+        return `Yes, you retain full ownership. ${ownershipFact}`;
+      }
+      return `At the end of the program, you own the code, infrastructure, content, and systems built for your company. Vispaico positions the program as a handover, not a dependency model.`;
+    }
+    case "services": {
+      return `Vispaico offers a range of services to help build and scale your company. ${bestFacts[0] ?? ""}`;
+    }
+    case "about": {
+      return `Vispaico was founded to help companies move fast and build great products. ${bestFacts[0] ?? ""}`;
+    }
+    default: {
+      // General answer: synthesize from top facts
+      const parts: string[] = [];
+      for (const fact of bestFacts) {
+        // Don't include facts that are too short or nav-like
+        if (fact.length >= 40 && !parts.includes(fact)) {
+          parts.push(fact);
+        }
+      }
+      if (parts.length > 0) {
+        // Use first sentence as lead, then supplement
+        const answer = parts.join(" ");
+        // Keep to ~3 sentences max
+        const sentences = answer.match(/[^.!?]+[.!?]+/g) ?? [answer];
+        return sentences.slice(0, 3).join(" ");
+      }
+      return `Based on "${bestTitle}": I found relevant information. Please visit the page for full details.`;
+    }
+  }
 }

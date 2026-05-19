@@ -2,21 +2,28 @@ import { NotFoundError } from "../../lib/errors.js";
 import { logger } from "../../lib/logger.js";
 import * as repo from "./repository.js";
 import * as wsRepo from "../workspaces/repository.js";
-import type { RetrieveInput, RetrieveResponse, RetrievedContext } from "./schema.js";
+import type { RetrieveInput, RetrieveResponse, RetrievedContext, RetrieveOptions } from "./schema.js";
 
 // Max sections from the same document to include in results (diversity-first)
 const MAX_SECTIONS_PER_DOCUMENT = 2;
 
+/**
+ * Boost multiplier applied to matches from URLs in the boost list.
+ * Effectively triples the relevance of preferred documents.
+ */
+const URL_BOOST_FACTOR = 3;
+
 export async function retrieveWorkspace(
   workspace_id: string,
   input: RetrieveInput,
+  options?: RetrieveOptions,
 ): Promise<RetrieveResponse> {
   const workspace = await wsRepo.findWorkspaceById(workspace_id);
   if (!workspace) {
     throw new NotFoundError("Workspace", workspace_id);
   }
 
-  logger.info({ workspace_id, query: input.query, limit: input.limit }, "Workspace retrieve");
+  logger.info({ workspace_id, query: input.query, limit: input.limit, boost_urls: options?.boost_urls }, "Workspace retrieve");
 
   // Fetch extra results so we have enough candidates for diversity-based selection
   const fetchLimit = Math.min(input.limit * 4, 60);
@@ -27,15 +34,39 @@ export async function retrieveWorkspace(
     return { query: input.query, contexts: [] };
   }
 
+  // Apply URL boosting if boost_urls specified
+  let items = result.results;
+  if (options?.boost_urls && options.boost_urls.length > 0) {
+    items = applyUrlBoost(items, options.boost_urls);
+  }
+
   // Build the diversity-first selection using round-robin
-  const contexts = selectDiverseContexts(result.results, input.limit, MAX_SECTIONS_PER_DOCUMENT);
+  const contexts = selectDiverseContexts(items, input.limit, MAX_SECTIONS_PER_DOCUMENT);
 
   logger.info(
-    { workspace_id, query: input.query, raw: result.results.length, returned: contexts.length },
+    { workspace_id, query: input.query, raw: result.results.length, boosted: items.length, returned: contexts.length },
     "Workspace retrieve results",
   );
 
   return { query: input.query, contexts };
+}
+
+/**
+ * Multiply relevance scores for contexts whose document_url matches
+ * any boosted URL pattern. A match is checked via substring containment
+ * (e.g. boosting "/en/launch" boosts "https://vispaico.com/en/launch" and "https://vispaico.com/en/launch-program").
+ */
+function applyUrlBoost(
+  items: RetrievedContext[],
+  boostUrls: string[],
+): RetrievedContext[] {
+  return items.map((ctx) => {
+    const url = ctx.document_url ?? "";
+    if (boostUrls.some((bu) => url.includes(bu))) {
+      return { ...ctx, relevance_score: ctx.relevance_score * URL_BOOST_FACTOR };
+    }
+    return ctx;
+  });
 }
 
 /**
