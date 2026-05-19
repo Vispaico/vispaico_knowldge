@@ -281,6 +281,7 @@ export async function triggerWebsiteCrawl(data: {
     // Firecrawl may return pages synchronously in the POST response body.
     // If present, use them directly and skip the status GET.
     let pages: CrawledPage[] = [];
+    let fetchWarning: string | undefined;
 
     if (firecrawlResult.pages && firecrawlResult.pages.length > 0) {
       pages = firecrawlResult.pages.map((p) => ({
@@ -300,22 +301,32 @@ export async function triggerWebsiteCrawl(data: {
       const crawlResults = await pollCrawlResults(crawlId, abortController);
 
       if (!crawlResults.success) {
-        logger.warn({ job_id: job.id, crawlId, error: crawlResults.error }, "Crawl polling failed");
-        const updated = await repo.updateIngestionJob(job.id, {
-          status: "failed",
-          error_message: crawlResults.error ?? "Failed to fetch crawl results",
-          completed_at: new Date(),
-          raw_response: crawlResults as unknown as Record<string, unknown>,
-        });
-        return updated!;
+        // Even when polling fails, we may have partial pages from the first batch.
+        // Persist them before recording the failure.
+        if (crawlResults.data && crawlResults.data.length > 0) {
+          logger.warn(
+            { job_id: job.id, crawlId, partialPages: crawlResults.data.length, error: crawlResults.error },
+            "Crawl polling had errors but partial pages were retrieved — persisting before recording failure",
+          );
+          pages = normalizeCrawlPages(crawlResults.data);
+          fetchWarning = crawlResults.error;
+        } else {
+          logger.warn({ job_id: job.id, crawlId, error: crawlResults.error }, "Crawl polling failed with no pages");
+          const updated = await repo.updateIngestionJob(job.id, {
+            status: "failed",
+            error_message: crawlResults.error ?? "Failed to fetch crawl results",
+            completed_at: new Date(),
+            raw_response: crawlResults as unknown as Record<string, unknown>,
+          });
+          return updated!;
+        }
+      } else {
+        pages = normalizeCrawlPages(crawlResults.data);
+        logger.info(
+          { job_id: job.id, crawlId, status: crawlResults.status, pagesReturned: pages.length },
+          "Crawl results fetched via polling",
+        );
       }
-
-      pages = normalizeCrawlPages(crawlResults.data);
-
-      logger.info(
-        { job_id: job.id, crawlId, status: crawlResults.status, pagesReturned: pages.length },
-        "Crawl results fetched via polling",
-      );
     }
 
     let persistResult = { docsInserted: 0, sectionsInserted: 0, skipped: 0 };
@@ -326,15 +337,20 @@ export async function triggerWebsiteCrawl(data: {
       logger.warn({ job_id: job.id, crawlId }, "Crawl returned zero pages");
     }
 
+    const responseJson: Record<string, unknown> = {
+      crawl_id: crawlId,
+      page_count: pages.length,
+      docs_inserted: persistResult.docsInserted,
+      sections_inserted: persistResult.sectionsInserted,
+      skipped: persistResult.skipped,
+    };
+    if (fetchWarning) {
+      responseJson.fetch_warning = fetchWarning;
+    }
+
     const updated = await repo.updateIngestionJob(job.id, {
       status: "success",
-      raw_response: {
-        crawl_id: crawlId,
-        page_count: pages.length,
-        docs_inserted: persistResult.docsInserted,
-        sections_inserted: persistResult.sectionsInserted,
-        skipped: persistResult.skipped,
-      } as unknown as Record<string, unknown>,
+      raw_response: responseJson,
       completed_at: new Date(),
     });
 

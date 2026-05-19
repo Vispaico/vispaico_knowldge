@@ -114,11 +114,27 @@ export async function fetchCrawlResults(crawlId: string): Promise<FirecrawlCrawl
   let nextUrl: string | undefined = statusUrl;
   let finalStatus: string | undefined;
   let finalError: string | undefined;
+  let paginationFailed = false;
 
   while (nextUrl) {
-    const absoluteUrl = nextUrl.startsWith("http") ? nextUrl : `${env.FIRECRAWL_BASE_URL}${nextUrl.startsWith("/") ? "" : "/"}${nextUrl}`;
+    // Resolve next URL against the current batch URL (not the raw base URL).
+    // Firecrawl may return next as:
+    //   - absolute URL: "https://firecrawl:3002/v1/crawl/abc?page=2"  (use as-is)
+    //   - relative path: "/v1/crawl/abc?page=2"                       (resolve against FIRECRAWL_BASE_URL)
+    //   - query+path: "v1/crawl/abc?page=2"                           (resolve against FIRECRAWL_BASE_URL)
+    let absoluteUrl: string;
+    if (nextUrl.startsWith("http://") || nextUrl.startsWith("https://")) {
+      absoluteUrl = nextUrl;
+    } else {
+      const base = env.FIRECRAWL_BASE_URL.replace(/\/+$/, "");
+      const path = nextUrl.startsWith("/") ? nextUrl : `/${nextUrl}`;
+      absoluteUrl = `${base}${path}`;
+    }
 
-    logger.debug({ firecrawlBaseUrl: env.FIRECRAWL_BASE_URL, crawlId, absoluteUrl }, "Fetching crawl result batch");
+    logger.debug(
+      { firecrawlBaseUrl: env.FIRECRAWL_BASE_URL, crawlId, nextUrl, absoluteUrl, nextIsAbsolute: nextUrl.startsWith("http") },
+      "Fetching crawl result batch",
+    );
 
     let response: Response;
     try {
@@ -130,22 +146,18 @@ export async function fetchCrawlResults(crawlId: string): Promise<FirecrawlCrawl
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Unknown error";
-      logger.error({ err, crawlId, absoluteUrl }, `Firecrawl results fetch failed at network level: ${msg}`);
-      return {
-        success: false,
-        error: `Network error fetching crawl results: ${msg}`,
-        data: allPages.length > 0 ? allPages : undefined,
-      };
+      logger.error({ err, crawlId, absoluteUrl, pagesSoFar: allPages.length }, `Firecrawl pagination fetch failed: ${msg}`);
+      paginationFailed = true;
+      finalError = `Pagination fetch failed after ${allPages.length} pages: ${msg}`;
+      break;
     }
 
     if (!response.ok) {
       const errorText = await response.text();
-      logger.error({ status: response.status, crawlId, body: errorText.slice(0, 2000) }, "Firecrawl results fetch HTTP error");
-      return {
-        success: false,
-        error: `Firecrawl returned ${response.status}: ${errorText.slice(0, 2000)}`,
-        data: allPages.length > 0 ? allPages : undefined,
-      };
+      logger.error({ status: response.status, crawlId, absoluteUrl, body: errorText.slice(0, 2000), pagesSoFar: allPages.length }, "Firecrawl results fetch HTTP error");
+      paginationFailed = true;
+      finalError = `HTTP ${response.status} after ${allPages.length} pages: ${errorText.slice(0, 2000)}`;
+      break;
     }
 
     const json = (await response.json()) as Record<string, unknown>;
@@ -166,17 +178,27 @@ export async function fetchCrawlResults(crawlId: string): Promise<FirecrawlCrawl
     );
   }
 
-  logger.info(
-    { crawlId, status: finalStatus, totalPages: allPages.length },
-    "Firecrawl crawl results fetched (all pages)",
-  );
-
-  return {
-    success: true,
+  // Return all pages even if pagination failed partway through
+  const result: FirecrawlCrawlStatusResponse = {
+    success: !paginationFailed && (!finalStatus || finalStatus !== "failed"),
     status: finalStatus,
     data: allPages,
     error: finalError,
   };
+
+  if (paginationFailed) {
+    logger.warn(
+      { crawlId, pagesFetched: allPages.length, error: finalError },
+      "Firecrawl crawl results partially fetched (pagination failed)",
+    );
+  } else {
+    logger.info(
+      { crawlId, status: finalStatus, totalPages: allPages.length },
+      "Firecrawl crawl results fetched (all pages)",
+    );
+  }
+
+  return result;
 }
 
 function extractPagesFromResponse(json: Record<string, unknown>): FirecrawlPage[] {
