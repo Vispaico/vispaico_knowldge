@@ -1,6 +1,6 @@
 import { NotFoundError } from "../../lib/errors.js";
 import { logger } from "../../lib/logger.js";
-import * as searchRepo from "../search/repository.js";
+import * as repo from "./repository.js";
 import * as wsRepo from "../workspaces/repository.js";
 import type { RetrieveInput, RetrieveResponse, RetrievedContext } from "./schema.js";
 
@@ -18,13 +18,14 @@ export async function retrieveWorkspace(
 
   logger.info({ workspace_id, query: input.query, limit: input.limit }, "Workspace retrieve");
 
-  // Use existing full-text search, requesting extra results to allow for deduplication
+  // Use dedicated retrieve repository with cascade of query strategies
   const fetchLimit = Math.min(input.limit * 3, 50);
-  const result = await searchRepo.searchWorkspace(workspace_id, {
-    query: input.query,
-    limit: fetchLimit,
-    offset: 0,
-  });
+  const result = await repo.retrieveContexts(workspace_id, input.query, fetchLimit);
+
+  if (result.total === 0) {
+    logger.warn({ workspace_id, query: input.query }, "Retrieve returned zero results across all strategies");
+    return { query: input.query, contexts: [] };
+  }
 
   // Group hits by document_id, keep top N per doc, flatten sorted by relevance
   const groups = new Map<string, RetrievedContext[]>();
