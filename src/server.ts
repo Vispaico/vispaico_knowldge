@@ -2,6 +2,7 @@ import { getEnv } from "./config/env.js";
 import { logger } from "./lib/logger.js";
 import { checkDbConnection, closeDb } from "./lib/db.js";
 import { checkRedisConnection, closeRedis } from "./lib/redis.js";
+import { runMigrations } from "./lib/migrate.js";
 import { buildApp } from "./app.js";
 
 async function main() {
@@ -14,6 +15,8 @@ async function main() {
     logger.error("Database connection failed, exiting");
     process.exit(1);
   }
+
+  await runMigrations();
 
   const redisOk = await checkRedisConnection();
   if (!redisOk) {

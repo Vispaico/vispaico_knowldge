@@ -8,10 +8,8 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node --enable-source-maps dist/server.js",
-    "migrate:latest": "knex migrate:latest --knexfile knexfile.ts",
-    "migrate:rollback": "knex migrate:rollback --knexfile knexfile.ts",
-    "typecheck": "tsc --noEmit",
-    "lint": "eslint src/ --ext .ts"
+    "migrate": "tsx src/lib/migrate-cli.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.2",
