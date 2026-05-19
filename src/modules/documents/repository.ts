@@ -67,3 +67,11 @@ export async function countDocumentsBySourceId(source_id: string): Promise<numbe
   const [result] = await db("documents").where({ source_id }).count();
   return Number(result.count ?? 0);
 }
+
+export async function findDocumentByUrlInSource(
+  url: string,
+  source_id: string,
+  workspace_id: string,
+): Promise<Document | undefined> {
+  return db("documents").where({ url, source_id, workspace_id }).first();
+}

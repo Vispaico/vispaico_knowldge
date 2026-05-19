@@ -4,8 +4,8 @@ import * as repo from "./repository.js";
 import * as wsRepo from "../workspaces/repository.js";
 import type { RetrieveInput, RetrieveResponse, RetrievedContext } from "./schema.js";
 
-// Max sections from the same document to include, to avoid one doc dominating results
-const MAX_SECTIONS_PER_DOCUMENT = 3;
+// Max sections from the same document to include in results (diversity-first)
+const MAX_SECTIONS_PER_DOCUMENT = 2;
 
 export async function retrieveWorkspace(
   workspace_id: string,
@@ -18,53 +18,86 @@ export async function retrieveWorkspace(
 
   logger.info({ workspace_id, query: input.query, limit: input.limit }, "Workspace retrieve");
 
-  // Use dedicated retrieve repository with cascade of query strategies
-  const fetchLimit = Math.min(input.limit * 3, 50);
+  // Fetch extra results so we have enough candidates for diversity-based selection
+  const fetchLimit = Math.min(input.limit * 4, 60);
   const result = await repo.retrieveContexts(workspace_id, input.query, fetchLimit);
 
-  if (result.total === 0) {
+  if (result.total === 0 || result.results.length === 0) {
     logger.warn({ workspace_id, query: input.query }, "Retrieve returned zero results across all strategies");
     return { query: input.query, contexts: [] };
   }
 
-  // Group hits by document_id, keep top N per doc, flatten sorted by relevance
-  const groups = new Map<string, RetrievedContext[]>();
-
-  for (const r of result.results) {
-    const ctx: RetrievedContext = {
-      document_id: r.document_id,
-      document_title: r.document_title,
-      document_url: r.document_url,
-      source_name: r.source_name,
-      section_id: r.section_id,
-      section_title: r.section_title,
-      content_snippet: r.content_snippet,
-      relevance_score: r.relevance_score,
-    };
-
-    const group = groups.get(r.document_id);
-    if (group) {
-      group.push(ctx);
-    } else {
-      groups.set(r.document_id, [ctx]);
-    }
-  }
-
-  // For each document, sort sections by relevance desc and cap per-document count
-  const deduped: RetrievedContext[] = [];
-  for (const entries of groups.values()) {
-    entries.sort((a, b) => b.relevance_score - a.relevance_score);
-    deduped.push(...entries.slice(0, MAX_SECTIONS_PER_DOCUMENT));
-  }
-
-  // Sort overall by relevance and trim to the requested limit
-  deduped.sort((a, b) => b.relevance_score - a.relevance_score);
-  const contexts = deduped.slice(0, input.limit);
+  // Build the diversity-first selection using round-robin
+  const contexts = selectDiverseContexts(result.results, input.limit, MAX_SECTIONS_PER_DOCUMENT);
 
   logger.info(
-    { workspace_id, query: input.query, raw: result.results.length, after_dedup: deduped.length, returned: contexts.length },
+    { workspace_id, query: input.query, raw: result.results.length, returned: contexts.length },
     "Workspace retrieve results",
   );
 
   return { query: input.query, contexts };
+}
+
+/**
+ * Select diverse contexts by taking the top section from each document first
+ * (sorted by that section's relevance), then filling remaining slots
+ * round-robin with additional sections. Caps at `maxPerDoc` per document.
+ */
+function selectDiverseContexts(
+  items: RetrievedContext[],
+  limit: number,
+  maxPerDoc: number,
+): RetrievedContext[] {
+  // Group by document_id, sort each group by relevance desc
+  const groups = new Map<string, RetrievedContext[]>();
+  for (const item of items) {
+    const g = groups.get(item.document_id);
+    if (g) {
+      g.push(item);
+    } else {
+      groups.set(item.document_id, [item]);
+    }
+  }
+
+  // Sort each document's sections by relevance score descending
+  for (const entries of groups.values()) {
+    entries.sort((a, b) => b.relevance_score - a.relevance_score);
+  }
+
+  // Sort documents by their best section's relevance score
+  const docEntries = Array.from(groups.entries())
+    .map(([docId, sections]) => ({ docId, bestScore: sections[0].relevance_score, sections }))
+    .sort((a, b) => b.bestScore - a.bestScore);
+
+  const result: RetrievedContext[] = [];
+  const taken = new Map<string, number>();
+
+  // Round 1: one section from each document (highest scoring first)
+  for (const entry of docEntries) {
+    if (result.length >= limit) break;
+    result.push(entry.sections[0]);
+    taken.set(entry.docId, 1);
+  }
+
+  // Round 2+: round-robin additional sections from top documents
+  if (result.length < limit) {
+    let idx = 0;
+    const maxIterations = docEntries.length * maxPerDoc * 2;
+    let iterations = 0;
+
+    while (result.length < limit && iterations < maxIterations) {
+      iterations++;
+      const entry = docEntries[idx % docEntries.length];
+      const count = taken.get(entry.docId)!;
+
+      if (count < maxPerDoc && count < entry.sections.length) {
+        result.push(entry.sections[count]);
+        taken.set(entry.docId, count + 1);
+      }
+
+      idx++;
+    }
+  }
+
+  return result;
 }

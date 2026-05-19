@@ -10,7 +10,7 @@ import { triggerFirecrawlCrawl, fetchCrawlResults } from "./firecrawl-client.js"
 /**
  * Normalize/canonicalize a URL to reduce duplicates from the same page.
  * Strips www, trailing slash, fragments, default ports, and common language
- * prefixes (/en, /fr, /de, /es, etc.).
+ * prefixes (/en, /fr, /de, /es, etc.). Preserves the path.
  */
 function normalizeUrl(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
@@ -138,13 +138,26 @@ async function persistCrawlPages(
 
     const metadata = page.metadata ?? {};
     const content = (page.content ?? page.markdown ?? "")?.substring(0, 1_000_000) ?? "";
-    const docUrl = normalizeUrl(page.url) ?? undefined;
+
+    // Prefer canonical URL from page metadata, otherwise normalize the crawl URL
+    const rawCanonical = (metadata.canonical as string | undefined) ?? page.url;
+    const docUrl = normalizeUrl(rawCanonical) ?? undefined;
     const title = page.title ?? docUrl ?? "Untitled";
 
     if (!docUrl && !content) {
       logger.debug({ job_id: jobId }, "Skipping page with no url and no content");
       skipped++;
       continue;
+    }
+
+    // Check for existing document with the same normalized URL within this source/workspace
+    if (docUrl) {
+      const existing = await docRepo.findDocumentByUrlInSource(docUrl, sourceId, wsId);
+      if (existing) {
+        logger.debug({ job_id: jobId, url: docUrl, existing_id: existing.id }, "Skipping duplicate document by normalized URL");
+        skipped++;
+        continue;
+      }
     }
 
     const doc = await docRepo.createDocument({
