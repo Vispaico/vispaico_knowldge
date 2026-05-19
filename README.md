@@ -179,7 +179,25 @@ src/
 ## Architecture Notes
 
 - **Multi-tenant**: Every record belongs to an organization. Workspaces provide further isolation.
-- **Firecrawl integration**: Isolated in `src/modules/ingestion/firecrawl-client.ts`. The `triggerFirecrawlCrawl()` POSTs to `/v1/crawl`, then `fetchCrawlResults()` polls `GET /v1/crawl/:id` until completion. Pages are normalized and persisted into `documents` and `document_sections`.
+- **Firecrawl integration**: Isolated in `src/modules/ingestion/firecrawl-client.ts`.
+
+  **Ingestion flow (POST /ingestion/website-crawl)**:
+
+  1. Validates workspace and source belong together; source type must be `website`.
+  2. Creates `ingestion_jobs` record with status `pending`, then sets `running` + `started_at`.
+  3. POSTs to Firecrawl `{base_url}/v1/crawl` with `max_pages`, `exclude_paths`, `include_paths` from config.
+  4. Stores the returned `crawl_id` in job metadata.
+  5. Polls `GET {base_url}/v1/crawl/{crawl_id}` every 2 seconds (up to 5 minute timeout).
+     - Waits for `status === "completed"` before proceeding.
+     - Follows `next` pagination URLs to accumulate **all** pages, not just the first batch.
+  6. Normalizes each page: title and url are read from top-level fields first, then fall back to `metadata.sourceURL` / `metadata.title` (Firecrawl v1 nesting).
+  7. For each page, creates a `documents` row. Content is taken from `markdown` or `content` field (truncated to 1 MB).
+  8. Splits document content by markdown headings (`#`, `##`, `###`) into `document_sections` rows. Pages with no headings still get one section.
+  9. All rows carry `organization_id`, `workspace_id`, `source_id`, and `ingestion_job_id`.
+  10. Updates job to `success` with page count in `raw_response`. If any step fails, job is set to `failed` with `error_message`.
+
+  **Why documents were empty before the fix**: The poller previously returned as soon as `data.length > 0`, which happened with partial pages while Firecrawl status was still `"scraping"`. The pagination `next` URL was never followed. Title and URL fields were read from top-level keys only, but Firecrawl v1 may nest them inside `metadata`.
+
 - **Document persistence**: Crawled pages are split by markdown headings into sections. Each page becomes a `document` row; each heading block becomes a `document_section` row. Content is truncated at 1 MB per page.
 - **Queue readiness**: The ingestion service is structured so a background queue worker can call `triggerWebsiteCrawl` directly without the HTTP layer. The polling timeout (5 min) and interval (2 s) are constants that can be tuned.
 - **Row-level security**: Tables have `organization_id` on every row. RLS policies can be added to the schema without code changes.

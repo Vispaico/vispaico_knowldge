@@ -33,6 +33,7 @@ interface FirecrawlCrawlStatusResponse {
   completed?: number;
   creditsUsed?: number;
   data?: FirecrawlPage[];
+  next?: string;
   error?: string;
 }
 
@@ -90,42 +91,86 @@ export async function triggerFirecrawlCrawl(params: FirecrawlCrawlParams): Promi
 
 export async function fetchCrawlResults(crawlId: string): Promise<FirecrawlCrawlStatusResponse> {
   const env = getEnv();
-  const url = `${env.FIRECRAWL_BASE_URL}/v1/crawl/${encodeURIComponent(crawlId)}`;
+  const baseUrl = `${env.FIRECRAWL_BASE_URL}/v1/crawl/${encodeURIComponent(crawlId)}`;
 
   logger.info({ crawlId }, "Fetching Firecrawl crawl results");
 
-  const response = await fetch(url, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${env.FIRECRAWL_API_KEY}`,
-    },
-  });
+  const allPages: FirecrawlPage[] = [];
+  let nextUrl: string | undefined = baseUrl;
+  let finalStatus: string | undefined;
+  let finalError: string | undefined;
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    logger.error({ status: response.status, body: errorText }, "Firecrawl results fetch failed");
-    return {
-      success: false,
-      error: `Firecrawl returned ${response.status}: ${errorText}`,
-    };
+  while (nextUrl) {
+    const absoluteUrl = nextUrl.startsWith("http") ? nextUrl : `${env.FIRECRAWL_BASE_URL}${nextUrl}`;
+
+    const response = await fetch(absoluteUrl, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${env.FIRECRAWL_API_KEY}`,
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      logger.error({ status: response.status, body: errorText }, "Firecrawl results fetch failed");
+      return {
+        success: false,
+        error: `Firecrawl returned ${response.status}: ${errorText}`,
+        data: allPages.length > 0 ? allPages : undefined,
+      };
+    }
+
+    const json = (await response.json()) as Record<string, unknown>;
+
+    finalStatus = json.status as string | undefined;
+    finalError = json.error as string | undefined;
+
+    const pageData = extractPagesFromResponse(json);
+    if (pageData.length > 0) {
+      allPages.push(...pageData);
+    }
+
+    nextUrl = json.next as string | undefined;
+
+    logger.debug(
+      { crawlId, status: finalStatus, batchPages: pageData.length, totalPages: allPages.length, hasNext: !!nextUrl },
+      "Firecrawl crawl results batch fetched",
+    );
   }
 
-  const json = (await response.json()) as Record<string, unknown>;
-
-  const statusData: FirecrawlCrawlStatusResponse = {
-    success: true,
-    status: json.status as string | undefined,
-    total: json.total as number | undefined,
-    completed: json.completed as number | undefined,
-    creditsUsed: json.creditsUsed as number | undefined,
-    data: (json.data as FirecrawlPage[] | undefined) ?? (json.pages as FirecrawlPage[] | undefined),
-    error: json.error as string | undefined,
-  };
-
   logger.info(
-    { crawlId, status: statusData.status, pages: statusData.data?.length ?? 0 },
-    "Firecrawl crawl results fetched",
+    { crawlId, status: finalStatus, totalPages: allPages.length },
+    "Firecrawl crawl results fetched (all pages)",
   );
 
-  return statusData;
+  return {
+    success: true,
+    status: finalStatus,
+    data: allPages,
+    error: finalError,
+  };
+}
+
+function extractPagesFromResponse(json: Record<string, unknown>): FirecrawlPage[] {
+  // Firecrawl v1 returns pages in the "data" array
+  const rawData = json.data ?? json.pages;
+  if (!Array.isArray(rawData)) return [];
+
+  return rawData.map((item: unknown) => {
+    const page = item as Record<string, unknown>;
+    const metadata = page.metadata as Record<string, unknown> | undefined;
+
+    // In Firecrawl v1, title and url may be at the top level or inside metadata
+    const url = (page.url as string | undefined) ?? (metadata?.sourceURL as string | undefined) ?? (metadata?.url as string | undefined);
+    const title = (page.title as string | undefined) ?? (metadata?.title as string | undefined);
+
+    return {
+      url,
+      title,
+      content: page.content as string | undefined,
+      markdown: page.markdown as string | undefined,
+      html: page.html as string | undefined,
+      metadata: metadata ?? { raw: page },
+    };
+  });
 }

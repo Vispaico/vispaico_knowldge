@@ -27,14 +27,22 @@ async function pollCrawlResults(
       return snapshot;
     }
 
-    if (snapshot.status === "completed" || snapshot.status === "failed") {
+    // Firecrawl status is "completed" when all pages are ready
+    if (snapshot.status === "completed") {
       return snapshot;
     }
 
-    if (snapshot.data && snapshot.data.length > 0) {
+    // For synchronous/v1.1 responses, data may arrive without a status field
+    if (snapshot.data && snapshot.data.length > 0 && !snapshot.status) {
       return snapshot;
     }
 
+    // If status is "failed", return what we have
+    if (snapshot.status === "failed") {
+      return snapshot;
+    }
+
+    // Still scraping — poll again
     return poll();
   };
 
@@ -80,6 +88,11 @@ async function persistCrawlPages(
   const sourceId = job.source_id;
   const jobId = job.id;
 
+  logger.info({ job_id: jobId, page_count: pages.length }, "Persisting crawl pages");
+
+  let docsInserted = 0;
+  let sectionsInserted = 0;
+
   for (const page of pages) {
     const content = page.content ?? page.markdown ?? "";
     const title = page.title ?? page.url ?? "Untitled";
@@ -99,6 +112,7 @@ async function persistCrawlPages(
         has_html: !!page.html,
       },
     });
+    docsInserted++;
 
     if (content) {
       const sectionMap = splitContentIntoSections(content);
@@ -111,11 +125,26 @@ async function persistCrawlPages(
           content: section.content,
           order_index: section.order_index,
         });
+        sectionsInserted++;
       }
+    } else {
+      // Ensure at least one section per document
+      await docRepo.createDocumentSection({
+        organization_id: orgId,
+        workspace_id: wsId,
+        document_id: doc.id,
+        title: undefined,
+        content: undefined,
+        order_index: 0,
+      });
+      sectionsInserted++;
     }
   }
 
-  logger.info({ count: pages.length, job_id: jobId }, "Crawl pages persisted");
+  logger.info(
+    { job_id: jobId, pages: pages.length, docs: docsInserted, sections: sectionsInserted },
+    "Crawl pages persisted",
+  );
 }
 
 function splitContentIntoSections(
@@ -234,10 +263,13 @@ export async function triggerWebsiteCrawl(data: {
       metadata: { firecrawl_crawl_id: crawlId },
     });
 
+    logger.info({ crawlId }, "Crawl triggered, polling for results");
+
     const abortController = new AbortController();
     const crawlResults = await pollCrawlResults(crawlId, abortController);
 
     if (!crawlResults.success) {
+      logger.warn({ job_id: job.id, crawlId, error: crawlResults.error }, "Crawl polling failed");
       const updated = await repo.updateIngestionJob(job.id, {
         status: "failed",
         error_message: crawlResults.error ?? "Failed to fetch crawl results",
@@ -249,8 +281,15 @@ export async function triggerWebsiteCrawl(data: {
 
     const pages = normalizeCrawlPages(crawlResults.data);
 
+    logger.info(
+      { job_id: job.id, crawlId, status: crawlResults.status, pagesReturned: pages.length },
+      "Crawl results ready, persisting pages",
+    );
+
     if (pages.length > 0) {
       await persistCrawlPages(job, pages);
+    } else {
+      logger.warn({ job_id: job.id, crawlId }, "Crawl returned zero pages");
     }
 
     const updated = await repo.updateIngestionJob(job.id, {
