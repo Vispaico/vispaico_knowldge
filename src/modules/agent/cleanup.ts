@@ -14,6 +14,7 @@ const BLOCK_PATTERNS = [
 
 // Patterns to replace within text
 const INLINE_PATTERNS: Array<[RegExp, string]> = [
+  [/<\/?mark>/gi, ""],                      // <mark> tags from ts_headline
   [/\[([^\]]+)\]\([^)]+\)/g, "$1"],        // markdown links -> just text
   [/[*_]{1,2}([*_]{1,2})?/g, ""],          // bold/italic markers
   [/<br\s*\/?>/gi, " "],                   // <br> tags -> space

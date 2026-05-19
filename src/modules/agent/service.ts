@@ -28,29 +28,34 @@ export async function agentChat(
     { boost_urls: boostUrls.length > 0 ? boostUrls : undefined },
   );
 
-  // Step 3: Clean and filter contexts
+  // Step 3: Clean and filter contexts (used for citations + confidence check only)
   const cleanedContexts = retrieveResult.contexts
     .map((ctx) => ({
       ...ctx,
       content_snippet: cleanSnippet(ctx.content_snippet),
     }))
-    .filter((ctx) => !isLowSignalSnippet(ctx.content_snippet) && ctx.content_snippet.length >= 20);
+    .filter((ctx) => !isLowSignalSnippet(ctx.content_snippet) && ctx.content_snippet.length >= 30);
 
-  // Step 4: Build synthesized answer
-  const answer = synthesizeAnswer(intent.primary, cleanedContexts);
+  const hasRelevantContent = cleanedContexts.length > 0;
 
-  // Step 5: Build citations (max 3, most relevant only)
-  const citations: Citation[] = cleanedContexts.slice(0, 3).map((ctx) => ({
-    document_title: ctx.document_title,
-    document_url: ctx.document_url,
-    section_title: ctx.section_title,
-  }));
+  // Step 4: Build synthesized answer — NEVER append raw snippet text
+  const answer = synthesizeAnswer(intent.primary, hasRelevantContent, cleanedContexts);
 
-  // Step 6: Build actions from intent detection
-  const actions = buildActions(intent.all_intents);
+  // Step 5: Build citations (max 3, meaningful only)
+  const citations: Citation[] = cleanedContexts
+    .filter((c) => c.document_title && c.document_title !== "Untitled")
+    .slice(0, 3)
+    .map((ctx) => ({
+      document_title: ctx.document_title,
+      document_url: ctx.document_url,
+      section_title: ctx.section_title,
+    }));
 
-  // Step 7: Limit contexts_used to 2-4
-  const contextsUsed = Math.min(Math.max(cleanedContexts.length, 2), 4);
+  // Step 6: Build actions (prefer 1 primary, optionally 1 secondary)
+  const actions = buildActions(intent.all_intents).slice(0, 2);
+
+  // Step 7: contexts_used target: 2-3
+  const contextsUsed = Math.min(cleanedContexts.length, 3);
 
   logger.info(
     { workspace_id, contexts_raw: retrieveResult.contexts.length, contexts_clean: cleanedContexts.length, intent: intent.primary, actions: actions.length },
@@ -65,88 +70,74 @@ export async function agentChat(
   };
 }
 
+/**
+ * Synthesize a standalone answer from intent + confidence check only.
+ * NEVER concatenates raw snippet text into the answer string.
+ */
 function synthesizeAnswer(
   intent: string,
-  contexts: Array<{ document_title: string; document_url?: string | null; content_snippet: string }>,
+  hasContent: boolean,
+  contexts: Array<{ document_title: string }>,
 ): string {
-  if (contexts.length === 0) {
-    return "I could not find relevant information to answer your question. Please try rephrasing or visit one of the pages linked below for more details.";
+  const bestTitle = contexts[0]?.document_title;
+
+  if (!hasContent) {
+    const base = "I could not find enough detail in the sources to fully answer your question.";
+    if (bestTitle) {
+      return `${base} I suggest reading "${bestTitle}" for more information.`;
+    }
+    return `${base} Please check the relevant page linked below.`;
   }
 
-  // Extract the most relevant content fragments
-  const relevantFacts: string[] = [];
-  const seenTitles = new Set<string>();
-
-  for (const ctx of contexts) {
-    if (seenTitles.size >= 3 && relevantFacts.length >= 3) break;
-    seenTitles.add(ctx.document_title);
-
-    const clean = ctx.content_snippet;
-    if (clean.length < 30) continue;
-
-    relevantFacts.push(clean);
-  }
-
-  // If we have no usable content after cleaning
-  if (relevantFacts.length === 0) {
-    return `Based on "${contexts[0].document_title}": I found relevant information but could not extract clear text. Please visit the page directly.`;
-  }
-
-  // Build a concise 2-5 sentence answer based on intent + facts
-  return buildGroundedAnswer(intent, contexts, relevantFacts);
-}
-
-function buildGroundedAnswer(
-  intent: string,
-  contexts: Array<{ document_title: string; document_url?: string | null }>,
-  facts: string[],
-): string {
-  const bestTitle = contexts[0]?.document_title ?? "the page";
-  const bestFacts = facts.slice(0, 3);
-
-  // Intent-specific answer formats
   switch (intent) {
-    case "contact": {
-      return `The best next step is to contact Vispaico directly or book a call through the contact page. ${bestFacts[0] ?? ""}`;
-    }
-    case "pricing": {
-      // If we have a concrete pricing snippet, lead with it
-      const pricingFact = bestFacts[0] ?? "";
-      if (pricingFact) {
-        return `${pricingFact}`;
-      }
-      return `The best page to read is the Launch Program page. It explains the offer and breaks down what is included.`;
-    }
     case "ownership": {
-      const ownershipFact = bestFacts[0] ?? "";
-      if (ownershipFact) {
-        return `Yes, you retain full ownership. ${ownershipFact}`;
-      }
-      return `At the end of the program, you own the code, infrastructure, content, and systems built for your company. Vispaico positions the program as a handover, not a dependency model.`;
+      return (
+        "At the end of the Launch Program, you own the code, infrastructure, content, " +
+        "and systems built for your company. Vispaico positions the program as a handover, " +
+        "not a dependency model."
+      );
     }
+
+    case "pricing": {
+      return (
+        "The best page to read is the Launch Program page. " +
+        "It explains the $24,800 / 6 month offer and breaks down what is included."
+      );
+    }
+
+    case "contact": {
+      return (
+        "The best next step is to contact Vispaico directly or book a call through the contact page."
+      );
+    }
+
     case "services": {
-      return `Vispaico offers a range of services to help build and scale your company. ${bestFacts[0] ?? ""}`;
+      return (
+        "Vispaico offers studio and consulting services to help companies build and ship products faster. " +
+        "The Services page has the full breakdown."
+      );
     }
+
+    case "process":
+    case "faq": {
+      return (
+        "The FAQ page covers this topic in detail. " +
+        "Based on what we retrieved, the main points are explained on the site."
+      );
+    }
+
     case "about": {
-      return `Vispaico was founded to help companies move fast and build great products. ${bestFacts[0] ?? ""}`;
+      return (
+        "Vispaico was founded to help companies move fast and build great products. " +
+        "The About page has more on the company, team, and mission."
+      );
     }
+
     default: {
-      // General answer: synthesize from top facts
-      const parts: string[] = [];
-      for (const fact of bestFacts) {
-        // Don't include facts that are too short or nav-like
-        if (fact.length >= 40 && !parts.includes(fact)) {
-          parts.push(fact);
-        }
+      if (bestTitle) {
+        return `I found relevant information in "${bestTitle}". Please visit the page for the full details.`;
       }
-      if (parts.length > 0) {
-        // Use first sentence as lead, then supplement
-        const answer = parts.join(" ");
-        // Keep to ~3 sentences max
-        const sentences = answer.match(/[^.!?]+[.!?]+/g) ?? [answer];
-        return sentences.slice(0, 3).join(" ");
-      }
-      return `Based on "${bestTitle}": I found relevant information. Please visit the page for full details.`;
+      return "I found relevant information. Please check the pages linked below for details.";
     }
   }
 }
