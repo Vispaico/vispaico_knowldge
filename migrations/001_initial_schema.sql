@@ -2,7 +2,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- ORGANIZATIONS
 
-CREATE TABLE organizations (
+CREATE TABLE IF NOT EXISTS organizations (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   name TEXT NOT NULL,
   slug TEXT NOT NULL UNIQUE,
@@ -13,7 +13,7 @@ CREATE TABLE organizations (
 
 -- WORKSPACES
 
-CREATE TABLE workspaces (
+CREATE TABLE IF NOT EXISTS workspaces (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
@@ -25,11 +25,11 @@ CREATE TABLE workspaces (
   UNIQUE (organization_id, slug)
 );
 
-CREATE INDEX idx_workspaces_organization_id ON workspaces(organization_id);
+CREATE INDEX IF NOT EXISTS idx_workspaces_organization_id ON workspaces(organization_id);
 
 -- WORKSPACE MEMBERS
 
-CREATE TABLE workspace_members (
+CREATE TABLE IF NOT EXISTS workspace_members (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL,
@@ -40,14 +40,23 @@ CREATE TABLE workspace_members (
   UNIQUE (workspace_id, user_id)
 );
 
-CREATE INDEX idx_workspace_members_workspace_id ON workspace_members(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_members_workspace_id ON workspace_members(workspace_id);
 
 -- SOURCES
 
-CREATE TYPE source_type AS ENUM ('website', 'note', 'pdf', 'doc', 'faq', 'policy');
-CREATE TYPE source_status AS ENUM ('active', 'inactive', 'error');
+DO $$ BEGIN
+  CREATE TYPE source_type AS ENUM ('website', 'note', 'pdf', 'doc', 'faq', 'policy');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
-CREATE TABLE sources (
+DO $$ BEGIN
+  CREATE TYPE source_status AS ENUM ('active', 'inactive', 'error');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE TABLE IF NOT EXISTS sources (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -61,16 +70,25 @@ CREATE TABLE sources (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_sources_organization_id ON sources(organization_id);
-CREATE INDEX idx_sources_workspace_id ON sources(workspace_id);
-CREATE INDEX idx_sources_type ON sources(type);
+CREATE INDEX IF NOT EXISTS idx_sources_organization_id ON sources(organization_id);
+CREATE INDEX IF NOT EXISTS idx_sources_workspace_id ON sources(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_sources_type ON sources(type);
 
 -- INGESTION JOBS
 
-CREATE TYPE ingestion_job_type AS ENUM ('website_crawl', 'note_ingest', 'pdf_ingest', 'doc_ingest', 'faq_ingest', 'policy_ingest');
-CREATE TYPE ingestion_job_status AS ENUM ('pending', 'running', 'success', 'failed');
+DO $$ BEGIN
+  CREATE TYPE ingestion_job_type AS ENUM ('website_crawl', 'note_ingest', 'pdf_ingest', 'doc_ingest', 'faq_ingest', 'policy_ingest');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 
-CREATE TABLE ingestion_jobs (
+DO $$ BEGIN
+  CREATE TYPE ingestion_job_status AS ENUM ('pending', 'running', 'success', 'failed');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE TABLE IF NOT EXISTS ingestion_jobs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -87,14 +105,14 @@ CREATE TABLE ingestion_jobs (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_ingestion_jobs_organization_id ON ingestion_jobs(organization_id);
-CREATE INDEX idx_ingestion_jobs_workspace_id ON ingestion_jobs(workspace_id);
-CREATE INDEX idx_ingestion_jobs_source_id ON ingestion_jobs(source_id);
-CREATE INDEX idx_ingestion_jobs_status ON ingestion_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_organization_id ON ingestion_jobs(organization_id);
+CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_workspace_id ON ingestion_jobs(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_source_id ON ingestion_jobs(source_id);
+CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_status ON ingestion_jobs(status);
 
 -- DOCUMENTS
 
-CREATE TABLE documents (
+CREATE TABLE IF NOT EXISTS documents (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -108,14 +126,14 @@ CREATE TABLE documents (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_documents_organization_id ON documents(organization_id);
-CREATE INDEX idx_documents_workspace_id ON documents(workspace_id);
-CREATE INDEX idx_documents_source_id ON documents(source_id);
-CREATE INDEX idx_documents_ingestion_job_id ON documents(ingestion_job_id);
+CREATE INDEX IF NOT EXISTS idx_documents_organization_id ON documents(organization_id);
+CREATE INDEX IF NOT EXISTS idx_documents_workspace_id ON documents(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_documents_source_id ON documents(source_id);
+CREATE INDEX IF NOT EXISTS idx_documents_ingestion_job_id ON documents(ingestion_job_id);
 
 -- DOCUMENT SECTIONS
 
-CREATE TABLE document_sections (
+CREATE TABLE IF NOT EXISTS document_sections (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   organization_id UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -128,12 +146,12 @@ CREATE TABLE document_sections (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_document_sections_document_id ON document_sections(document_id);
-CREATE INDEX idx_document_sections_organization_id ON document_sections(organization_id);
+CREATE INDEX IF NOT EXISTS idx_document_sections_document_id ON document_sections(document_id);
+CREATE INDEX IF NOT EXISTS idx_document_sections_organization_id ON document_sections(organization_id);
 
 -- AUDIT LOGS
 
-CREATE TABLE audit_logs (
+CREATE TABLE IF NOT EXISTS audit_logs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   organization_id UUID NOT NULL,
   workspace_id UUID,
@@ -146,6 +164,6 @@ CREATE TABLE audit_logs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_audit_logs_organization_id ON audit_logs(organization_id);
-CREATE INDEX idx_audit_logs_resource ON audit_logs(resource_type, resource_id);
-CREATE INDEX idx_audit_logs_created_at ON audit_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_organization_id ON audit_logs(organization_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_resource ON audit_logs(resource_type, resource_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
