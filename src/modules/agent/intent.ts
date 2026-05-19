@@ -24,14 +24,23 @@ const INTENT_RULES: Array<{
     boost_urls: ["/en/contact"],
   },
   {
+    type: "ownership",
+    keywords: [
+      "own", "ownership", "owner",
+      "belongs to me", "belongs to the client", "belong",
+      "keep the code", "keep the infrastructure",
+      "handover", "handed over",
+      "what do i get at the end", "what is transferred",
+      "do i own", "does the client own", "do clients keep",
+      "ip", "intellectual property",
+      "code", "codebase", "source code", "infrastructure",
+    ],
+    boost_urls: ["/en/faq", "/en/launch"],
+  },
+  {
     type: "pricing",
     keywords: ["pricing", "price", "cost", "plan", "subscription", "pay", "payment", "24,800", "24800", "24.800", "launch program", "included", "offer"],
     boost_urls: ["/en/launch", "/en/faq"],
-  },
-  {
-    type: "ownership",
-    keywords: ["owner", "ownership", "own", "ip", "intellectual property", "code", "codebase", "source code", "infrastructure", "belong", "client own", "keep"],
-    boost_urls: ["/en/faq", "/en/launch"],
   },
   {
     type: "services",
@@ -102,8 +111,22 @@ export function buildActions(intents: IntentType[]): Array<{ type: "open_page"; 
     seen.add(a.url);
   }
 
+  // Ownership: always suggest FAQ + Launch
+  if (intents.includes("ownership")) {
+    const ownershipAction = INTENT_ACTION_LABELS.ownership!;
+    if (!seen.has(ownershipAction.url)) {
+      actions.push({ type: "open_page", label: ownershipAction.label, url: ownershipAction.url });
+      seen.add(ownershipAction.url);
+    }
+    const launchAction = INTENT_ACTION_LABELS.pricing!;
+    if (!seen.has(launchAction.url)) {
+      actions.push({ type: "open_page", label: "See Launch Program", url: launchAction.url });
+      seen.add(launchAction.url);
+    }
+  }
+
   for (const intent of intents) {
-    if (intent === "contact") continue; // already added
+    if (intent === "contact" || intent === "ownership") continue;
     const a = INTENT_ACTION_LABELS[intent];
     if (a && !seen.has(a.url)) {
       actions.push({ type: "open_page", label: a.label, url: a.url });

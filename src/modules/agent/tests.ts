@@ -5,6 +5,7 @@
 
 import { detectIntent, buildActions } from "./intent.js";
 import { cleanSnippet, isLowSignalSnippet } from "./cleanup.js";
+import { synthesizeAnswer } from "./synthesizer.js";
 
 let passed = 0;
 let failed = 0;
@@ -111,10 +112,10 @@ function testLowSignalDetection(): void {
 function testRegressionQueries(): void {
   console.log("\n[Regression queries]");
 
-  // Query 1: Ownership
+  // Query 1: Ownership — must be primary even when "Launch Program" also matches pricing
   const q1 = detectIntent("What do I own at the end of the Launch Program?");
+  assert(q1.primary === "ownership", "Q1: ownership is primary");
   assert(q1.all_intents.includes("ownership"), "Q1: ownership in all_intents");
-  assert(q1.all_intents.includes("pricing"), "Q1: pricing also detected (launch program)");
   const q1Actions = buildActions(q1.all_intents);
   assert(q1Actions.some((a) => a.url.includes("faq")), "Q1: action points to faq");
   assert(q1Actions.length <= 2, "Q1: at most 2 actions");
@@ -133,6 +134,31 @@ function testRegressionQueries(): void {
   const q3Actions = buildActions(q3.all_intents);
   assert(q3Actions.some((a) => a.url.includes("contact")), "Q3: action points to contact");
   assert(q3Actions.length <= 2, "Q3: at most 2 actions (contact + possible about)");
+}
+
+// ── Answer synthesis regression tests ───────────────────────────────
+
+function testAnswerSynthesis(): void {
+  console.log("\n[Answer synthesis]");
+
+  const dummyContexts = [{ document_title: "Launch Program" }];
+
+  // Ownership answer: must reference ownership, must NOT contain pricing language
+  const ownershipAnswer = synthesizeAnswer("ownership", true, dummyContexts);
+  assert(ownershipAnswer.includes("own") || ownershipAnswer.includes("ownership"), "ownership answer mentions ownership");
+  assert(!ownershipAnswer.includes("best page to read"), "ownership answer has no pricing phrasing");
+  assert(!ownershipAnswer.includes("24,800"), "ownership answer has no dollar amount");
+  assert(!ownershipAnswer.includes("pricing"), "ownership answer has no 'pricing' language");
+  assert(ownershipAnswer.includes("handover"), "ownership answer mentions handover");
+
+  // Pricing answer: must reference launch program page
+  const pricingAnswer = synthesizeAnswer("pricing", true, dummyContexts);
+  assert(pricingAnswer.includes("Launch Program"), "pricing answer mentions Launch Program");
+  assert(pricingAnswer.includes("24,800"), "pricing answer mentions the offer");
+
+  // Fallback (no content): should be short, no raw snippet text
+  const noContentAnswer = synthesizeAnswer("general", false, []);
+  assert(noContentAnswer.length < 200, "fallback answer is short");
 }
 
 // ── Cleanup guardrail tests ─────────────────────────────────────────
@@ -158,6 +184,7 @@ testActionBuilding();
 testCleanup();
 testLowSignalDetection();
 testCleanupGuardrails();
+testAnswerSynthesis();
 testRegressionQueries();
 
 const total = passed + failed;
