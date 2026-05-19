@@ -7,6 +7,42 @@ import * as docRepo from "../documents/repository.js";
 import * as repo from "./repository.js";
 import { triggerFirecrawlCrawl, fetchCrawlResults } from "./firecrawl-client.js";
 
+/**
+ * Normalize/canonicalize a URL to reduce duplicates from the same page.
+ * Strips www, trailing slash, fragments, default ports, and common language
+ * prefixes (/en, /fr, /de, /es, etc.).
+ */
+function normalizeUrl(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    // Lowercase hostname and strip www
+    url.hostname = url.hostname.toLowerCase().replace(/^www\./, "");
+    // Remove default ports
+    if (
+      (url.protocol === "https:" && url.port === "443") ||
+      (url.protocol === "http:" && url.port === "80")
+    ) {
+      url.port = "";
+    }
+    // Remove fragment
+    url.hash = "";
+    // Remove trailing slash from pathname
+    if (url.pathname !== "/") {
+      url.pathname = url.pathname.replace(/\/+$/, "");
+    }
+    // Strip common two-letter language path prefixes (/en, /fr, /de, etc.)
+    url.pathname = url.pathname.replace(/^\/(en|fr|de|es|it|pt|ja|ko|zh|ru|ar|nl|pl|sv|da|fi|nb|tr)\/?$/i, "/");
+    url.pathname = url.pathname.replace(/^\/(en|fr|de|es|it|pt|ja|ko|zh|ru|ar|nl|pl|sv|da|fi|nb|tr)\//i, "/");
+    // Sort query params for consistency
+    const params = Array.from(url.searchParams.entries()).sort(([a], [b]) => a.localeCompare(b));
+    url.search = params.length > 0 ? `?${params.map(([k, v]) => `${k}=${v}`).join("&")}` : "";
+    return url.toString();
+  } catch {
+    return raw;
+  }
+}
+
 const POLL_INTERVAL_MS = 2000;
 const POLL_TIMEOUT_MS = 300_000;
 
@@ -102,7 +138,7 @@ async function persistCrawlPages(
 
     const metadata = page.metadata ?? {};
     const content = (page.content ?? page.markdown ?? "")?.substring(0, 1_000_000) ?? "";
-    const docUrl = page.url ?? undefined;
+    const docUrl = normalizeUrl(page.url) ?? undefined;
     const title = page.title ?? docUrl ?? "Untitled";
 
     if (!docUrl && !content) {

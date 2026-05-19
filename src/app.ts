@@ -11,6 +11,7 @@ import { sourceRoutes } from "./modules/sources/routes.js";
 import { ingestionRoutes } from "./modules/ingestion/routes.js";
 import { documentRoutes } from "./modules/documents/routes.js";
 import { searchRoutes } from "./modules/search/routes.js";
+import { retrieveRoutes } from "./modules/retrieve/routes.js";
 
 export async function buildApp() {
   const env = getEnv();
@@ -68,6 +69,7 @@ export async function buildApp() {
   await app.register(ingestionRoutes);
   await app.register(documentRoutes);
   await app.register(searchRoutes);
+  await app.register(retrieveRoutes);
 
   return app;
 }
