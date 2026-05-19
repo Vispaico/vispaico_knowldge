@@ -13,6 +13,7 @@ interface FirecrawlCrawlResponse {
   id?: string;
   jobId?: string;
   data?: unknown;
+  pages?: FirecrawlPage[];
   error?: string;
 }
 
@@ -39,7 +40,9 @@ interface FirecrawlCrawlStatusResponse {
 
 export async function triggerFirecrawlCrawl(params: FirecrawlCrawlParams): Promise<FirecrawlCrawlResponse> {
   const env = getEnv();
-  const url = `${env.FIRECRAWL_BASE_URL}/v1/crawl`;
+  const apiUrl = `${env.FIRECRAWL_BASE_URL}/v1/crawl`;
+
+  logger.info({ firecrawlBaseUrl: env.FIRECRAWL_BASE_URL, targetUrl: params.url, apiUrl }, "Triggering Firecrawl crawl");
 
   const body: Record<string, unknown> = {
     url: params.url,
@@ -57,65 +60,90 @@ export async function triggerFirecrawlCrawl(params: FirecrawlCrawlParams): Promi
     body.includes = params.includePaths;
   }
 
-  logger.info({ url: params.url }, "Triggering Firecrawl crawl");
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${env.FIRECRAWL_API_KEY}`,
-    },
-    body: JSON.stringify(body),
-  });
+  let response: Response;
+  try {
+    response = await fetch(apiUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${env.FIRECRAWL_API_KEY}`,
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unknown fetch error";
+    logger.error({ err, firecrawlBaseUrl: env.FIRECRAWL_BASE_URL, apiUrl }, `Firecrawl crawl request failed at network level: ${msg}`);
+    return { success: false, error: `Network error starting crawl: ${msg}` };
+  }
 
   if (!response.ok) {
     const errorText = await response.text();
-    logger.error({ status: response.status, body: errorText }, "Firecrawl crawl request failed");
+    logger.error({ status: response.status, body: errorText.slice(0, 2000) }, "Firecrawl crawl request failed");
     return {
       success: false,
-      error: `Firecrawl returned ${response.status}: ${errorText}`,
+      error: `Firecrawl returned ${response.status}: ${errorText.slice(0, 2000)}`,
     };
   }
 
   const json = (await response.json()) as Record<string, unknown>;
 
-  logger.info({ firecrawlResponse: json }, "Firecrawl crawl triggered successfully");
+  // Firecrawl v1 may return page data synchronously in the POST response
+  const pages = extractPagesFromResponse(json);
+
+  logger.info(
+    { firecrawlBaseUrl: env.FIRECRAWL_BASE_URL, id: json.id, jobId: json.jobId, syncPages: pages.length },
+    "Firecrawl crawl triggered successfully",
+  );
 
   return {
     success: true,
     id: json.id as string | undefined,
     jobId: json.jobId as string | undefined,
     data: json.data,
+    pages: pages.length > 0 ? pages : undefined,
   };
 }
 
 export async function fetchCrawlResults(crawlId: string): Promise<FirecrawlCrawlStatusResponse> {
   const env = getEnv();
-  const baseUrl = `${env.FIRECRAWL_BASE_URL}/v1/crawl/${encodeURIComponent(crawlId)}`;
+  const statusUrl = `${env.FIRECRAWL_BASE_URL}/v1/crawl/${encodeURIComponent(crawlId)}`;
 
-  logger.info({ crawlId }, "Fetching Firecrawl crawl results");
+  logger.info({ firecrawlBaseUrl: env.FIRECRAWL_BASE_URL, crawlId, statusUrl }, "Fetching Firecrawl crawl results");
 
   const allPages: FirecrawlPage[] = [];
-  let nextUrl: string | undefined = baseUrl;
+  let nextUrl: string | undefined = statusUrl;
   let finalStatus: string | undefined;
   let finalError: string | undefined;
 
   while (nextUrl) {
-    const absoluteUrl = nextUrl.startsWith("http") ? nextUrl : `${env.FIRECRAWL_BASE_URL}${nextUrl}`;
+    const absoluteUrl = nextUrl.startsWith("http") ? nextUrl : `${env.FIRECRAWL_BASE_URL}${nextUrl.startsWith("/") ? "" : "/"}${nextUrl}`;
 
-    const response = await fetch(absoluteUrl, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${env.FIRECRAWL_API_KEY}`,
-      },
-    });
+    logger.debug({ firecrawlBaseUrl: env.FIRECRAWL_BASE_URL, crawlId, absoluteUrl }, "Fetching crawl result batch");
+
+    let response: Response;
+    try {
+      response = await fetch(absoluteUrl, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${env.FIRECRAWL_API_KEY}`,
+        },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      logger.error({ err, crawlId, absoluteUrl }, `Firecrawl results fetch failed at network level: ${msg}`);
+      return {
+        success: false,
+        error: `Network error fetching crawl results: ${msg}`,
+        data: allPages.length > 0 ? allPages : undefined,
+      };
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
-      logger.error({ status: response.status, body: errorText }, "Firecrawl results fetch failed");
+      logger.error({ status: response.status, crawlId, body: errorText.slice(0, 2000) }, "Firecrawl results fetch HTTP error");
       return {
         success: false,
-        error: `Firecrawl returned ${response.status}: ${errorText}`,
+        error: `Firecrawl returned ${response.status}: ${errorText.slice(0, 2000)}`,
         data: allPages.length > 0 ? allPages : undefined,
       };
     }
@@ -152,7 +180,7 @@ export async function fetchCrawlResults(crawlId: string): Promise<FirecrawlCrawl
 }
 
 function extractPagesFromResponse(json: Record<string, unknown>): FirecrawlPage[] {
-  // Firecrawl v1 returns pages in the "data" array
+  // Firecrawl v1 returns pages in the "data" array (top-level or inside a nested structure)
   const rawData = json.data ?? json.pages;
   if (!Array.isArray(rawData)) return [];
 

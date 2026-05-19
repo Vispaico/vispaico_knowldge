@@ -278,28 +278,45 @@ export async function triggerWebsiteCrawl(data: {
       metadata: { firecrawl_crawl_id: crawlId },
     });
 
-    logger.info({ crawlId }, "Crawl triggered, polling for results");
+    // Firecrawl may return pages synchronously in the POST response body.
+    // If present, use them directly and skip the status GET.
+    let pages: CrawledPage[] = [];
 
-    const abortController = new AbortController();
-    const crawlResults = await pollCrawlResults(crawlId, abortController);
+    if (firecrawlResult.pages && firecrawlResult.pages.length > 0) {
+      pages = firecrawlResult.pages.map((p) => ({
+        url: p.url,
+        title: p.title,
+        content: p.content,
+        markdown: p.markdown,
+        html: p.html,
+        metadata: p.metadata,
+      }));
 
-    if (!crawlResults.success) {
-      logger.warn({ job_id: job.id, crawlId, error: crawlResults.error }, "Crawl polling failed");
-      const updated = await repo.updateIngestionJob(job.id, {
-        status: "failed",
-        error_message: crawlResults.error ?? "Failed to fetch crawl results",
-        completed_at: new Date(),
-        raw_response: crawlResults as unknown as Record<string, unknown>,
-      });
-      return updated!;
+      logger.info({ job_id: job.id, crawlId, syncPages: pages.length }, "Using synchronous crawl pages from POST response");
+    } else {
+      logger.info({ crawlId }, "No sync pages in POST response, polling Firecrawl for results");
+
+      const abortController = new AbortController();
+      const crawlResults = await pollCrawlResults(crawlId, abortController);
+
+      if (!crawlResults.success) {
+        logger.warn({ job_id: job.id, crawlId, error: crawlResults.error }, "Crawl polling failed");
+        const updated = await repo.updateIngestionJob(job.id, {
+          status: "failed",
+          error_message: crawlResults.error ?? "Failed to fetch crawl results",
+          completed_at: new Date(),
+          raw_response: crawlResults as unknown as Record<string, unknown>,
+        });
+        return updated!;
+      }
+
+      pages = normalizeCrawlPages(crawlResults.data);
+
+      logger.info(
+        { job_id: job.id, crawlId, status: crawlResults.status, pagesReturned: pages.length },
+        "Crawl results fetched via polling",
+      );
     }
-
-    const pages = normalizeCrawlPages(crawlResults.data);
-
-    logger.info(
-      { job_id: job.id, crawlId, status: crawlResults.status, pagesReturned: pages.length },
-      "Crawl results ready, persisting pages",
-    );
 
     let persistResult = { docsInserted: 0, sectionsInserted: 0, skipped: 0 };
 
