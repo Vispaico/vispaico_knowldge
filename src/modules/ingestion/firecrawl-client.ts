@@ -156,21 +156,29 @@ function extractPagesFromResponse(json: Record<string, unknown>): FirecrawlPage[
   const rawData = json.data ?? json.pages;
   if (!Array.isArray(rawData)) return [];
 
-  return rawData.map((item: unknown) => {
+  const pages: FirecrawlPage[] = [];
+
+  for (const item of rawData) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
     const page = item as Record<string, unknown>;
-    const metadata = page.metadata as Record<string, unknown> | undefined;
+    const metadata = (page.metadata as Record<string, unknown> | undefined) ?? {};
 
     // In Firecrawl v1, title and url may be at the top level or inside metadata
-    const url = (page.url as string | undefined) ?? (metadata?.sourceURL as string | undefined) ?? (metadata?.url as string | undefined);
-    const title = (page.title as string | undefined) ?? (metadata?.title as string | undefined);
+    const url = (page.url as string | undefined) ?? (metadata.sourceURL as string | undefined) ?? (metadata.url as string | undefined);
+    const title = (page.title as string | undefined) ?? (metadata.title as string | undefined);
 
-    return {
+    pages.push({
       url,
       title,
       content: page.content as string | undefined,
       markdown: page.markdown as string | undefined,
       html: page.html as string | undefined,
-      metadata: metadata ?? { raw: page },
-    };
-  });
+      metadata,
+    });
+  }
+
+  return pages;
 }

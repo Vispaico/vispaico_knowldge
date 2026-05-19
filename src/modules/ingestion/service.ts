@@ -82,20 +82,34 @@ function normalizeCrawlPages(
 async function persistCrawlPages(
   job: IngestionJob,
   pages: CrawledPage[],
-): Promise<void> {
+): Promise<{ docsInserted: number; sectionsInserted: number; skipped: number }> {
   const orgId = job.organization_id;
   const wsId = job.workspace_id;
   const sourceId = job.source_id;
   const jobId = job.id;
 
-  logger.info({ job_id: jobId, page_count: pages.length }, "Persisting crawl pages");
+  logger.info({ job_id: jobId, total_items: pages.length }, "Persisting crawl pages");
 
   let docsInserted = 0;
   let sectionsInserted = 0;
+  let skipped = 0;
 
   for (const page of pages) {
-    const content = page.content ?? page.markdown ?? "";
-    const title = page.title ?? page.url ?? "Untitled";
+    if (!page || typeof page !== "object") {
+      skipped++;
+      continue;
+    }
+
+    const metadata = page.metadata ?? {};
+    const content = (page.content ?? page.markdown ?? "")?.substring(0, 1_000_000) ?? "";
+    const docUrl = page.url ?? undefined;
+    const title = page.title ?? docUrl ?? "Untitled";
+
+    if (!docUrl && !content) {
+      logger.debug({ job_id: jobId }, "Skipping page with no url and no content");
+      skipped++;
+      continue;
+    }
 
     const doc = await docRepo.createDocument({
       organization_id: orgId,
@@ -103,10 +117,10 @@ async function persistCrawlPages(
       source_id: sourceId,
       ingestion_job_id: jobId,
       title,
-      url: page.url,
-      content: content.substring(0, 1_000_000),
+      url: docUrl,
+      content: content || undefined,
       metadata: {
-        ...(page.metadata ?? {}),
+        ...metadata,
         raw_title: page.title,
         crawl_url: page.url,
         has_html: !!page.html,
@@ -128,7 +142,6 @@ async function persistCrawlPages(
         sectionsInserted++;
       }
     } else {
-      // Ensure at least one section per document
       await docRepo.createDocumentSection({
         organization_id: orgId,
         workspace_id: wsId,
@@ -142,9 +155,11 @@ async function persistCrawlPages(
   }
 
   logger.info(
-    { job_id: jobId, pages: pages.length, docs: docsInserted, sections: sectionsInserted },
+    { job_id: jobId, total_items: pages.length, docs: docsInserted, sections: sectionsInserted, skipped },
     "Crawl pages persisted",
   );
+
+  return { docsInserted, sectionsInserted, skipped };
 }
 
 function splitContentIntoSections(
@@ -286,15 +301,23 @@ export async function triggerWebsiteCrawl(data: {
       "Crawl results ready, persisting pages",
     );
 
+    let persistResult = { docsInserted: 0, sectionsInserted: 0, skipped: 0 };
+
     if (pages.length > 0) {
-      await persistCrawlPages(job, pages);
+      persistResult = await persistCrawlPages(job, pages);
     } else {
       logger.warn({ job_id: job.id, crawlId }, "Crawl returned zero pages");
     }
 
     const updated = await repo.updateIngestionJob(job.id, {
       status: "success",
-      raw_response: { crawl_id: crawlId, page_count: pages.length } as unknown as Record<string, unknown>,
+      raw_response: {
+        crawl_id: crawlId,
+        page_count: pages.length,
+        docs_inserted: persistResult.docsInserted,
+        sections_inserted: persistResult.sectionsInserted,
+        skipped: persistResult.skipped,
+      } as unknown as Record<string, unknown>,
       completed_at: new Date(),
     });
 
