@@ -9,6 +9,7 @@ const envSchema = z.object({
   REDIS_URL: z.string().url(),
   FIRECRAWL_BASE_URL: z.string().url(),
   FIRECRAWL_API_KEY: z.string().min(1),
+  CORS_ORIGINS: z.string().default(""),
 });
 
 export type Env = z.infer<typeof envSchema>;

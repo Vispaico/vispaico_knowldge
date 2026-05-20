@@ -14,6 +14,14 @@ import { searchRoutes } from "./modules/search/routes.js";
 import { retrieveRoutes } from "./modules/retrieve/routes.js";
 import { agentRoutes } from "./modules/agent/routes.js";
 
+function parseOrigins(raw: string): (string | boolean)[] {
+  if (!raw || raw.trim() === "") return [false];
+  return raw
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean);
+}
+
 export async function buildApp() {
   const env = getEnv();
 
@@ -22,9 +30,13 @@ export async function buildApp() {
     disableRequestLogging: false,
   });
 
+  const allowedOrigins = parseOrigins(env.CORS_ORIGINS);
+
   await app.register(cors, {
-    origin: true,
+    origin: allowedOrigins.length > 0 ? allowedOrigins : false,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type"],
+    credentials: false,
   });
 
   await app.register(helmet, {
