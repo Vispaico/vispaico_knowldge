@@ -44,7 +44,12 @@ const INTENT_RULES: Array<{
   },
   {
     type: "services",
-    keywords: ["service", "offer", "solution", "consulting", "studio", "what do you do", "capabilities", "expertise"],
+    keywords: [
+      "service", "offer", "solution", "consulting", "studio",
+      "what do you do", "capabilities", "expertise",
+      "other services", "individually", "a la carte",
+      "separately", "what else",
+    ],
     boost_urls: ["/en/services"],
   },
   {

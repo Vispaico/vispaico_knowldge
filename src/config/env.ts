@@ -10,6 +10,9 @@ const envSchema = z.object({
   FIRECRAWL_BASE_URL: z.string().url(),
   FIRECRAWL_API_KEY: z.string().min(1),
   CORS_ORIGINS: z.string().default(""),
+  LLM_MODEL: z.string().default("gpt-4o-mini"),
+  LLM_BASE_URL: z.string().default("https://api.openai.com/v1"),
+  LLM_API_KEY: z.string().default(""),
 });
 
 export type Env = z.infer<typeof envSchema>;

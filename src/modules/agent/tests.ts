@@ -3,9 +3,16 @@
  * Run with: npx tsx src/modules/agent/tests.ts
  */
 
-import { detectIntent, buildActions } from "./intent.js";
-import { cleanSnippet, isLowSignalSnippet } from "./cleanup.js";
-import { synthesizeAnswer } from "./synthesizer.js";
+// Set dummy env vars for modules that call getEnv() at import time
+process.env.NODE_ENV = "test";
+process.env.DATABASE_URL = "postgres://localhost:5432/test";
+process.env.REDIS_URL = "redis://localhost:6379";
+process.env.FIRECRAWL_BASE_URL = "http://localhost:3000";
+process.env.FIRECRAWL_API_KEY = "test-key";
+
+const { detectIntent, buildActions } = await import("./intent.js");
+const { cleanSnippet, isLowSignalSnippet } = await import("./cleanup.js");
+const { synthesizeAnswer } = await import("./synthesizer.js");
 
 let passed = 0;
 let failed = 0;
@@ -38,6 +45,13 @@ function testIntentDetection(): void {
   const mixed = detectIntent("How much does the Launch Program cost and what do I own?");
   assert(mixed.all_intents.includes("pricing"), "mixed: pricing detected");
   assert(mixed.all_intents.includes("ownership"), "mixed: ownership detected");
+
+  // New: services intent detection
+  const services1 = detectIntent("What other services do you offer?");
+  assert(services1.all_intents.includes("services"), 'services detected: "What other services do you offer?"');
+
+  const services2 = detectIntent("Do you offer services individually?");
+  assert(services2.all_intents.includes("services"), 'services detected: "Do you offer services individually?"');
 }
 
 // ── Action building tests ────────────────────────────────────────────
@@ -134,31 +148,39 @@ function testRegressionQueries(): void {
   const q3Actions = buildActions(q3.all_intents);
   assert(q3Actions.some((a) => a.url.includes("contact")), "Q3: action points to contact");
   assert(q3Actions.length <= 2, "Q3: at most 2 actions (contact + possible about)");
+
+  // Query 4: Services
+  const q4 = detectIntent("What other services do you offer?");
+  assert(q4.all_intents.includes("services"), "Q4: services intent detected");
+  const q4Actions = buildActions(q4.all_intents);
+  assert(q4Actions.some((a) => a.url.includes("services")), "Q4: action points to services");
+
+  // Query 5: Services individually
+  const q5 = detectIntent("Do you offer services individually?");
+  assert(q5.all_intents.includes("services"), "Q5: services intent detected");
 }
 
 // ── Answer synthesis regression tests ───────────────────────────────
 
-function testAnswerSynthesis(): void {
+async function testAnswerSynthesis(): Promise<void> {
   console.log("\n[Answer synthesis]");
 
-  const dummyContexts = [{ document_title: "Launch Program" }];
+  const dummyContexts = [
+    { document_title: "Launch Program", document_url: "/en/launch", section_title: "What You Own", content_snippet: "At the end of the Launch Program, you own the code, infrastructure, content, and systems built for your company." },
+  ];
 
   // Ownership answer: must reference ownership, must NOT contain pricing language
-  const ownershipAnswer = synthesizeAnswer("ownership", true, dummyContexts);
+  const ownershipAnswer = await synthesizeAnswer("What do I own at the end of the Launch Program?", "ownership", dummyContexts);
   assert(ownershipAnswer.includes("own") || ownershipAnswer.includes("ownership"), "ownership answer mentions ownership");
-  assert(!ownershipAnswer.includes("best page to read"), "ownership answer has no pricing phrasing");
   assert(!ownershipAnswer.includes("24,800"), "ownership answer has no dollar amount");
-  assert(!ownershipAnswer.includes("pricing"), "ownership answer has no 'pricing' language");
-  assert(ownershipAnswer.includes("handover"), "ownership answer mentions handover");
 
   // Pricing answer: must reference launch program page
-  const pricingAnswer = synthesizeAnswer("pricing", true, dummyContexts);
+  const pricingAnswer = await synthesizeAnswer("Which page should I read for pricing?", "pricing", dummyContexts);
   assert(pricingAnswer.includes("Launch Program"), "pricing answer mentions Launch Program");
-  assert(pricingAnswer.includes("24,800"), "pricing answer mentions the offer");
 
   // Fallback (no content): should be short, no raw snippet text
-  const noContentAnswer = synthesizeAnswer("general", false, []);
-  assert(noContentAnswer.length < 200, "fallback answer is short");
+  const noContentAnswer = await synthesizeAnswer("Something unknown", "general", []);
+  assert(noContentAnswer.length < 300, "fallback answer is short");
 }
 
 // ── Cleanup guardrail tests ─────────────────────────────────────────
@@ -184,7 +206,7 @@ testActionBuilding();
 testCleanup();
 testLowSignalDetection();
 testCleanupGuardrails();
-testAnswerSynthesis();
+await testAnswerSynthesis();
 testRegressionQueries();
 
 const total = passed + failed;

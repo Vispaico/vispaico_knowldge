@@ -37,10 +37,8 @@ export async function agentChat(
     }))
     .filter((ctx) => !isLowSignalSnippet(ctx.content_snippet) && ctx.content_snippet.length >= 30);
 
-  const hasRelevantContent = cleanedContexts.length > 0;
-
   // Step 4: Build synthesized answer — NEVER append raw snippet text
-  const answer = synthesizeAnswer(intent.primary, hasRelevantContent, cleanedContexts);
+  const answer = await synthesizeAnswer(input.message, intent.primary, cleanedContexts);
 
   // Step 5: Build citations (max 3, meaningful only)
   const citations: Citation[] = cleanedContexts

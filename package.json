@@ -5,10 +5,10 @@
   "description": "Multi-tenant knowledge platform backend",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "tsx watch --env-file .env.local src/server.ts",
     "build": "tsc",
     "start": "node --enable-source-maps dist/server.js",
-    "migrate": "tsx src/lib/migrate-cli.ts",
+    "migrate": "tsx --env-file .env.local src/lib/migrate-cli.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
