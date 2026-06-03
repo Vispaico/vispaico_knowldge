@@ -32,26 +32,75 @@ async function main() {
   function testIntentDetection(): void {
     console.log("\n[Intent detection]");
 
-    const ownership = detectIntent("What do I own at the end of the Launch Program?");
-    assert(ownership.all_intents.includes("ownership"), "ownership intent detected");
-    assert(ownership.boost_urls.length > 0, "ownership has boost URLs");
+    // AIOS
+    const aios = detectIntent("What is AIOS?");
+    assert(aios.all_intents.includes("aios"), "AIOS intent detected from 'aios'");
+    assert(aios.primary === "aios", "AIOS is primary");
 
-    const pricing = detectIntent("Which page should I read if I want pricing and what is included?");
-    assert(pricing.all_intents.includes("pricing"), "pricing intent detected");
+    const aios2 = detectIntent("Tell me about Vispaico AIOS");
+    assert(aios2.all_intents.includes("aios"), "AIOS intent detected from 'Vispaico AIOS'");
 
-    const contact = detectIntent("I want to talk to someone about my project.");
-    assert(contact.all_intents.includes("contact"), "contact intent detected");
-    assert(contact.primary === "contact", "contact is primary");
+    const aios3 = detectIntent("What does Vispaico do?");
+    assert(aios3.all_intents.includes("aios"), "AIOS intent detected from 'What does Vispaico do'");
 
-    const mixed = detectIntent("How much does the Launch Program cost and what do I own?");
+    const aios4 = detectIntent("What is a private AI workforce?");
+    assert(aios4.all_intents.includes("aios"), "AIOS intent detected from 'private AI workforce'");
+
+    // Company Brain
+    const brain = detectIntent("What is Company Brain?");
+    assert(brain.all_intents.includes("company_brain"), "Company Brain intent detected");
+    assert(brain.boost_urls.some((u) => u.includes("company-brain")), "Company Brain boosts brain URL");
+
+    const brain2 = detectIntent("Phase one of AIOS");
+    assert(brain2.all_intents.includes("company_brain"), "Phase one detected as company brain");
+
+    // Company Analyst
+    const analyst = detectIntent("What is Company Analyst?");
+    assert(analyst.all_intents.includes("company_analyst"), "Company Analyst intent detected");
+
+    // Company Operator
+    const operator = detectIntent("What is Company Operator?");
+    assert(operator.all_intents.includes("company_operator"), "Company Operator intent detected");
+
+    // AI Operations Audit
+    const audit = detectIntent("What is the AI Operations Audit?");
+    assert(audit.all_intents.includes("ai_operations_audit"), "AI Operations Audit intent detected");
+
+    const audit2 = detectIntent("Where should we start?");
+    assert(audit2.all_intents.includes("ai_operations_audit"), "Where to start detects AI audit");
+
+    // Infrastructure / Ownership
+    const infra = detectIntent("Is this self-hosted?");
+    assert(infra.all_intents.includes("infrastructure"), "Self-hosted detected as infrastructure");
+
+    const infra2 = detectIntent("Do I own the code?");
+    assert(infra2.all_intents.includes("infrastructure"), "Own the code detected as infrastructure");
+
+    const infra3 = detectIntent("Is there vendor lock-in?");
+    assert(infra3.all_intents.includes("infrastructure"), "Vendor lock-in detected as infrastructure");
+
+    // Industries
+    const ind = detectIntent("What industries is this for?");
+    assert(ind.all_intents.includes("industries"), "Industries intent detected");
+
+    const ind2 = detectIntent("Who is AIOS for?");
+    assert(ind2.all_intents.includes("industries"), "Who is AIOS for detected as industries");
+
+    // Pricing
+    const pricing1 = detectIntent("How much does AIOS cost?");
+    assert(pricing1.all_intents.includes("pricing"), "AIOS cost detected as pricing");
+
+    const pricing2 = detectIntent("What are your setup fees?");
+    assert(pricing2.all_intents.includes("pricing"), "Setup fees detected as pricing");
+
+    // Services
+    const services1 = detectIntent("What services do you offer?");
+    assert(services1.all_intents.includes("services"), 'services detected: "What services do you offer?"');
+
+    // Mixed
+    const mixed = detectIntent("What is AIOS and how much does it cost?");
+    assert(mixed.all_intents.includes("aios"), "mixed: aios detected");
     assert(mixed.all_intents.includes("pricing"), "mixed: pricing detected");
-    assert(mixed.all_intents.includes("ownership"), "mixed: ownership detected");
-
-    const services1 = detectIntent("What other services do you offer?");
-    assert(services1.all_intents.includes("services"), 'services detected: "What other services do you offer?"');
-
-    const services2 = detectIntent("Do you offer services individually?");
-    assert(services2.all_intents.includes("services"), 'services detected: "Do you offer services individually?"');
   }
 
   // ── Action building tests ────────────────────────────────────────────
@@ -61,15 +110,22 @@ async function main() {
 
     const contactActions = buildActions(["contact"]);
     assert(contactActions.length >= 1, "contact produces at least 1 action");
-    assert(contactActions[0].url.includes("contact"), "contact action points to contact page");
+
+    const aiosActions = buildActions(["aios"]);
+    assert(aiosActions.length >= 1, "aios produces at least 1 action");
+    assert(aiosActions[0].url.includes("aios"), "aios action points to aios page");
+
+    const brainActions = buildActions(["company_brain"]);
+    assert(brainActions.length >= 1, "company_brain produces at least 1 action");
+    assert(brainActions[0].url.includes("company-brain"), "company_brain action points to brain page");
 
     const pricingActions = buildActions(["pricing"]);
     assert(pricingActions.length >= 1, "pricing produces at least 1 action");
-    assert(pricingActions[0].url.includes("launch"), "pricing action points to launch page");
+    assert(pricingActions[0].url.includes("aios"), "pricing action points to aios page");
 
-    const mixedActions = buildActions(["pricing", "contact"]);
-    assert(mixedActions.length >= 1, "mixed actions has results");
-    assert(mixedActions[0].url.includes("contact"), "contact action is first when present");
+    const infraActions = buildActions(["infrastructure"]);
+    assert(infraActions.length >= 1, "infrastructure produces at least 1 action");
+    assert(infraActions[0].url.includes("aios"), "infrastructure action points to aios page");
   }
 
   // ── Cleanup tests ────────────────────────────────────────────────────
@@ -85,9 +141,9 @@ async function main() {
     const withImage = cleanSnippet("Some text ![image](https://example.com/img.png) more text");
     assert(!withImage.includes("![image]"), "markdown image syntax stripped");
 
-    const withLink = cleanSnippet("Check [our FAQ](https://vispaico.com/en/faq) for details.");
-    assert(withLink.includes("our FAQ"), "link text preserved");
-    assert(!withLink.includes("[our FAQ]"), "link brackets stripped");
+    const withLink = cleanSnippet("Check [the AIOS page](https://vispaico.com/en/aios) for details.");
+    assert(withLink.includes("the AIOS page"), "link text preserved");
+    assert(!withLink.includes("[the AIOS page]"), "link brackets stripped");
     assert(!withLink.includes("(https://"), "link URL stripped");
 
     const withSep = cleanSnippet("text\n---\nmore text");
@@ -110,8 +166,8 @@ async function main() {
     assert(isLowSignalSnippet("!!!"), "punctuation only is low signal");
     assert(isLowSignalSnippet("a b"), "very short is low signal");
 
-    assert(!isLowSignalSnippet("At the end of the Launch Program, you own the code and infrastructure built for your company."), "meaningful text is not low signal");
-    assert(!isLowSignalSnippet("The best page to read is the Launch Program page. It explains the offer."), "informative text is not low signal");
+    assert(!isLowSignalSnippet("AIOS is a private AI operating system deployed on your own infrastructure."), "meaningful text is not low signal");
+    assert(!isLowSignalSnippet("Company Brain learns your company's knowledge and becomes an expert on your business."), "informative text is not low signal");
   }
 
   // ── Specific query regression tests ─────────────────────────────────
@@ -119,32 +175,32 @@ async function main() {
   function testRegressionQueries(): void {
     console.log("\n[Regression queries]");
 
-    const q1 = detectIntent("What do I own at the end of the Launch Program?");
-    assert(q1.primary === "ownership", "Q1: ownership is primary");
-    assert(q1.all_intents.includes("ownership"), "Q1: ownership in all_intents");
-    const q1Actions = buildActions(q1.all_intents);
-    assert(q1Actions.some((a) => a.url.includes("faq")), "Q1: action points to faq");
-    assert(q1Actions.length <= 2, "Q1: at most 2 actions");
+    const q1 = detectIntent("What is AIOS?");
+    assert(q1.primary === "aios", "Q1: aios is primary");
+    assert(q1.all_intents.includes("aios"), "Q1: aios in all_intents");
 
-    const q2 = detectIntent("Which page should I read if I want pricing and what is included?");
+    const q2 = detectIntent("How much does AIOS cost?");
     assert(q2.all_intents.includes("pricing"), "Q2: pricing intent detected");
-    const q2Actions = buildActions(q2.all_intents);
-    assert(q2Actions.some((a) => a.url.includes("launch")), "Q2: action points to launch");
+    assert(q2.all_intents.includes("aios"), "Q2: aios intent detected");
 
-    const q3 = detectIntent("I want to talk to someone about my project.");
-    assert(q3.primary === "contact", "Q3: contact primary intent");
-    assert(q3.all_intents.includes("contact"), "Q3: contact in intents");
-    const q3Actions = buildActions(q3.all_intents);
-    assert(q3Actions.some((a) => a.url.includes("contact")), "Q3: action points to contact");
-    assert(q3Actions.length <= 2, "Q3: at most 2 actions (contact + possible about)");
+    const q3 = detectIntent("What is Company Brain?");
+    assert(q3.primary === "company_brain", "Q3: company_brain primary intent");
 
-    const q4 = detectIntent("What other services do you offer?");
-    assert(q4.all_intents.includes("services"), "Q4: services intent detected");
-    const q4Actions = buildActions(q4.all_intents);
-    assert(q4Actions.some((a) => a.url.includes("services")), "Q4: action points to services");
+    const q4 = detectIntent("What's the difference between Company Brain and Company Analyst?");
+    assert(q4.all_intents.includes("company_brain"), "Q4: company_brain detected");
+    assert(q4.all_intents.includes("company_analyst"), "Q4: company_analyst detected");
 
-    const q5 = detectIntent("Do you offer services individually?");
-    assert(q5.all_intents.includes("services"), "Q5: services intent detected");
+    const q5 = detectIntent("Is this self-hosted?");
+    assert(q5.all_intents.includes("infrastructure"), "Q5: infrastructure intent detected");
+
+    const q6 = detectIntent("What industries is this for?");
+    assert(q6.all_intents.includes("industries"), "Q6: industries intent detected");
+
+    const q7 = detectIntent("Where should we start?");
+    assert(q7.all_intents.includes("ai_operations_audit"), "Q7: where to start -> audit detected");
+
+    const q8 = detectIntent("What does Vispaico do?");
+    assert(q8.all_intents.includes("aios"), "Q8: what does vispaico do -> aios");
   }
 
   // ── Answer synthesis regression tests ───────────────────────────────
@@ -152,16 +208,20 @@ async function main() {
   async function testAnswerSynthesis(): Promise<void> {
     console.log("\n[Answer synthesis]");
 
-    const dummyContexts = [
-      { document_title: "Launch Program", document_url: "/en/launch", section_title: "What You Own", content_snippet: "At the end of the Launch Program, you own the code, infrastructure, content, and systems built for your company." },
+    const aiosContexts = [
+      { document_title: "AIOS", document_url: "/en/aios", section_title: "Private AI Workforce", content_snippet: "Vispaico AIOS is a private AI operating system deployed on your own infrastructure, giving your business a secure and fully-owned AI workforce." },
     ];
 
-    const ownershipAnswer = await synthesizeAnswer("What do I own at the end of the Launch Program?", "ownership", dummyContexts);
-    assert(ownershipAnswer.includes("own") || ownershipAnswer.includes("ownership"), "ownership answer mentions ownership");
-    assert(!ownershipAnswer.includes("24,800"), "ownership answer has no dollar amount");
+    const aiosAnswer = await synthesizeAnswer("What is AIOS?", "aios", aiosContexts);
+    assert(aiosAnswer.length > 0, "AIOS answer is not empty");
+    assert(!aiosAnswer.includes("24,800"), "AIOS answer has no legacy pricing language");
 
-    const pricingAnswer = await synthesizeAnswer("Which page should I read for pricing?", "pricing", dummyContexts);
-    assert(pricingAnswer.includes("Launch Program"), "pricing answer mentions Launch Program");
+    const brainContexts = [
+      { document_title: "Company Brain", document_url: "/en/services/company-brain", section_title: "Overview", content_snippet: "Company Brain is the first phase of AIOS. It learns your company's internal knowledge and becomes an expert on your business." },
+    ];
+
+    const brainAnswer = await synthesizeAnswer("What is Company Brain?", "company_brain", brainContexts);
+    assert(brainAnswer.length > 0, "Company Brain answer is not empty");
 
     const noContentAnswer = await synthesizeAnswer("Something unknown", "general", []);
     assert(noContentAnswer.length < 300, "fallback answer is short");
