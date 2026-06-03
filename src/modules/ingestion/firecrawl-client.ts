@@ -53,11 +53,11 @@ export async function triggerFirecrawlCrawl(params: FirecrawlCrawlParams): Promi
   }
 
   if (params.excludePaths && params.excludePaths.length > 0) {
-    body.excludes = params.excludePaths;
+    body.excludePaths = params.excludePaths;
   }
 
   if (params.includePaths && params.includePaths.length > 0) {
-    body.includes = params.includePaths;
+    body.includePaths = params.includePaths;
   }
 
   let response: Response;
